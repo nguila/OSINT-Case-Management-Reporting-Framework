@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSINT Case Management & Reporting Framework</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                            600: '#475569',
+                            500: '#64748b',
+                            400: '#94a3b8',
+                            300: '#cbd5e1',
+                            200: '#e2e8f0',
+                            100: '#f1f5f9',
+                            50: '#f8fafc',
+                        },
+                        cyber: {
+                            blue: '#0284c7',
+                            dark: '#0f172a',
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- React & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans antialiased selection:bg-sky-500 selection:text-white">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const PHASES_CONFIG = [
+            {
+                id: 1,
+                name: "Domain & DNS Reconnaissance",
+                tools: ["whois", "dnsrecon", "dig", "nslookup", "host"],
+                finds: "Registrant info, registrar, registration date, nameservers, MX/NS/TXT/A/AAAA records, SPF/DKIM records",
+                commands: [
+                    "whois target.com",
+                    "dig target.com ANY +noall +answer",
+                    "dnsrecon -d target.com -t std",
+                    "dig mx target.com +short",
+                    "dig txt target.com +short"
+                ]
+            },
+            {
+                id: 2,
+                name: "IP Address & Infrastructure Analysis",
+                tools: ["whois on IPs", "curl ipinfo.io", "reverse DNS", "nmap -sL", "VirusTotal", "SecurityTrails", "Censys", "Shodan"],
+                finds: "GeoIP data, reverse DNS mappings, other domains sharing an IP, subnet ranges",
+                commands: [
+                    "whois 192.0.2.1",
+                    "curl -s https://ipinfo.io/192.0.2.1/json",
+                    "dig -x 192.0.2.1 +short",
+                    "nmap -sL 192.0.2.0/24"
+                ]
+            },
+            {
+                id: 3,
+                name: "Subdomain Enumeration",
+                tools: ["sublist3r", "dnsrecon brute force", "amass", "reverse whois"],
+                finds: "A list of discovered subdomains and their associated IPs",
+                commands: [
+                    "sublist3r -d target.com -o subdomains.txt",
+                    "amass enum -d target.com",
+                    "dnsrecon -d target.com -t brt -w subdomains-top1000.txt"
+                ]
+            },
+            {
+                id: 4,
+                name: "Web Technology & Server Analysis",
+                tools: ["curl -I", "whatweb", "openssl s_client", "crt.sh", "BuiltWith"],
+                finds: "Server/CMS/framework fingerprints, SSL/TLS certificate details, security headers",
+                commands: [
+                    "curl -I -s https://target.com",
+                    "whatweb -v https://target.com",
+                    "openssl s_client -connect target.com:443 -servername target.com",
+                    "curl -s 'https://crt.sh/?q=target.com&output=json'"
+                ]
+            },
+            {
+                id: 5,
+                name: "Email & Personnel Discovery",
+                tools: ["theHarvester", "haveibeenpwned.com", "hunter.io", "clearbit.com", "phonebook.cz"],
+                finds: "Email addresses tied to the domain, breach exposure, personnel OSINT",
+                commands: [
+                    "theHarvester -d target.com -b google,linkedin,twitter -l 500",
+                    "python3 theHarvester.py -d target.com -b all"
+                ]
+            },
+            {
+                id: 6,
+                name: "Social Media & Personnel OSINT",
+                tools: ["manual search (LinkedIn, X, GitHub, Google News)", "GitHub API search", "sherlock"],
+                finds: "Employee profiles, company announcements, leaked repos, social presence",
+                commands: [
+                    "sherlock target_username",
+                    "github-search --query 'target.com password'"
+                ]
+            },
+            {
+                id: 7,
+                name: "Wayback Machine & Historical Data",
+                tools: ["archive.org Wayback API", "manual browsing"],
+                finds: "Old site versions, forgotten admin panels/endpoints, outdated tech, past directory structures",
+                commands: [
+                    "curl -s 'http://web.archive.org/cdx/search/cdx?url=target.com/*&output=json&collapse=urlkey'",
+                    "waybackurls target.com"
+                ]
+            },
+            {
+                id: 8,
+                name: "Google Dorking",
+                tools: ["targeted search operators (site:, filetype:, inurl:)"],
+                finds: "Exposed documents, configuration files, backup archives, directory listings",
+                commands: [
+                    "site:target.com filetype:pdf",
+                    "site:target.com inurl:admin | backup | config | database",
+                    "site:target.com ext:sql | ext:env | ext:log"
+                ]
+            },
+            {
+                id: 9,
+                name: "Passive Reconnaissance Automation",
+                tools: ["recon-ng", "Maltego", "OSINT Framework directory"],
+                finds: "Comprehensive consolidated modular data models and visual relationship graphs",
+                commands: [
+                    "recon-ng",
+                    "workspace create target_engagement",
+                    "modules load discovery/domains_contacts/whois_pocs"
+                ]
+            }
+        ];
+
+        function App() {
+            const [investigations, setInvestigations] = useState([
+                {
+                    id: "target-acme-01",
+                    name: "acme-corp.internal",
+                    client: "Acme Corporation",
+                    dateCreated: new Date().toISOString().split('T')[0],
+                    status: "In Progress",
+                    phases: {
+                        1: { status: "complete", data: { registrant: "Acme Corp Admin", registrar: "MarkMonitor Inc.", registrationDate: "2010-04-12", nameservers: "ns1.acmedns.net\nns2.acmedns.net", mxRecords: "mail.acme-corp.internal (Priority 10)", txtRecords: "v=spf1 include:_spf.google.com ~all", aRecords: "192.0.2.50" } },
+                        2: { status: "in-progress", data: { primaryIp: "192.0.2.50", geoIp: "Ashburn, VA, USA", hostingProvider: "AWS EC2 (AS16509)", coHosted: "staging.acme-corp.internal", subnet: "192.0.2.0/24" } },
+                        3: { status: "not-started", data: { subdomainsRaw: "" } },
+                        4: { status: "not-started", data: {} },
+                        5: { status: "not-started", data: {} },
+                        6: { status: "not-started", data: {} },
+                        7: { status: "not-started", data: {} },
+                        8: { status: "not-started", data: {} },
+                        9: { status: "not-started", data: {} }
+                    },
+                    findings: {
+                        interesting: "- SPF record is configured correctly with Google Workspace.\n- Staging server exposed on adjacent IP address.",
+                        recommendations: "- Conduct authenticated vulnerability assessment on staging assets.\n- Verify employee email hygiene against recent credential dumps."
+                    }
+                }
+            ]);
+
+            const [currentInvId, setCurrentInvId] = useState("target-acme-01");
+            const [currentTab, setCurrentTab] = useState("overview");
+            const [newTargetModalOpen, setNewTargetModalOpen] = useState(false);
+            const [newTargetName, setNewTargetName] = useState("");
+            const [newTargetClient, setNewTargetClient] = useState("");
+            const [toastMessage, setToastMessage] = useState(null);
+
+            const activeInv = useMemo(() => {
+                return investigations.find(i => i.id === currentInvId) || investigations[0];
+            }, [investigations, currentInvId]);
+
+            const showToast = (msg) => {
+                setToastMessage(msg);
+                setTimeout(() => setToastMessage(null), 3000);
+            };
+
+            const handlePhaseDataChange = (phaseId, field, value) => {
+                setInvestigations(prev => prev.map(inv => {
+                    if (inv.id !== activeInv.id) return inv;
+                    return {
+                        ...inv,
+                        phases: {
+                            ...inv.phases,
+                            [phaseId]: {
+                                ...inv.phases[phaseId],
+                                data: {
+                                    ...inv.phases[phaseId].data,
+                                    [field]: value
+                                }
+                            }
+                        }
+                    };
+                }));
+            };
+
+            const handlePhaseStatusChange = (phaseId, status) => {
+                setInvestigations(prev => prev.map(inv => {
+                    if (inv.id !== activeInv.id) return inv;
+                    return {
+                        ...inv,
+                        phases: {
+                            ...inv.phases,
+                            [phaseId]: {
+                                ...inv.phases[phaseId],
+                                status: status
+                            }
+                        }
+                    };
+                }));
+            };
+
+            const handleGeneralFindingChange = (field, value) => {
+                setInvestigations(prev => prev.map(inv => {
+                    if (inv.id !== activeInv.id) return inv;
+                    return {
+                        ...inv,
+                        findings: {
+                            ...inv.findings,
+                            [field]: value
+                        }
+                    };
+                }));
+            };
+
+            const handleCreateTarget = (e) => {
+                e.preventDefault();
+                if (!newTargetName.trim()) return;
+                const id = "target-" + Math.random().toString(36).substring(2, 9);
+                const newInv = {
+                    id,
+                    name: newTargetName.trim(),
+                    client: newTargetClient.trim() || "Internal Engagement",
+                    dateCreated: new Date().toISOString().split('T')[0],
+                    status: "In Progress",
+                    phases: {
+                        1: { status: "not-started", data: {} },
+                        2: { status: "not-started", data: {} },
+                        3: { status: "not-started", data: {} },
+                        4: { status: "not-started", data: {} },
+                        5: { status: "not-started", data: {} },
+                        6: { status: "not-started", data: {} },
+                        7: { status: "not-started", data: {} },
+                        8: { status: "not-started", data: {} },
+                        9: { status: "not-started", data: {} }
+                    },
+                    findings: { interesting: "", recommendations: "" }
+                };
+                setInvestigations(prev => [...prev, newInv]);
+                setCurrentInvId(id);
+                setNewTargetName("");
+                setNewTargetClient("");
+                setNewTargetModalOpen(false);
+                showToast(`Initialized investigation: ${newInv.name}`);
+            };
+
+            const copyToClipboard = (text, label) => {
+                navigator.clipboard.writeText(text);
+                showToast(`Copied ${label} to clipboard!`);
+            };
+
+            const completedPhasesCount = useMemo(() => {
+                if (!activeInv) return 0;
+                return Object.values(activeInv.phases).filter(p => p.status === 'complete').length;
+            }, [activeInv]);
+
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [currentTab, activeInv, newTargetModalOpen]);
+
+            return (
+                <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col">
+                    {toastMessage && (
+                        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-lg shadow-xl flex items-center space-x-3 text-sm font-medium animate-bounce">
+                            <i data-lucide="check-circle" className="w-5 h-5 text-emerald-400"></i>
+                            <span>{toastMessage}</span>
+                        </div>
+                    )}
+
+                    {/* Top Header Bar */}
+                    <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between sticky top-0 z-40 shadow-sm">
+                        <div className="flex items-center space-x-4">
+                            <div className="flex items-center space-x-2 text-sky-600 font-bold">
+                                <i data-lucide="shield" className="w-6 h-6"></i>
+                                <span className="text-base tracking-tight">OSINTOPS // FRAMEWORK</span>
+                            </div>
+                            <div className="h-6 w-px bg-slate-200"></div>
+                            <div className="flex items-center space-x-2">
+                                <span className="text-xs text-slate-500 font-medium uppercase">Target:</span>
+                                <select 
+                                    value={activeInv.id} 
+                                    onChange={(e) => setCurrentInvId(e.target.value)}
+                                    className="bg-slate-50 border border-slate-300 text-slate-800 rounded px-3 py-1 text-sm font-medium focus:outline-none focus:border-sky-500"
+                                >
+                                    {investigations.map(inv => (
+                                        <option key={inv.id} value={inv.id}>{inv.name} ({inv.client})</option>
+                                    ))}
+                                </select>
+                                <button 
+                                    onClick={() => setNewTargetModalOpen(true)}
+                                    className="bg-sky-50 hover:bg-sky-100 text-sky-600 border border-sky-200 p-1.5 rounded transition"
+                                    title="New Investigation Target"
+                                >
+                                    <i data-lucide="plus" className="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center space-x-6 text-sm">
+                            <div className="hidden md:flex items-center space-x-3">
+                                <span className="text-xs text-slate-500 font-medium">Progress:</span>
+                                <div className="w-32 bg-slate-200 rounded-full h-2 overflow-hidden">
+                                    <div 
+                                        className="bg-sky-600 h-2 rounded-full transition-all duration-500" 
+                                        style={{ width: `${(completedPhasesCount / 9) * 100}%` }}
+                                    ></div>
+                                </div>
+                                <span className="text-sky-600 font-bold text-xs">{completedPhasesCount}/9</span>
+                            </div>
+                            <button 
+                                onClick={() => setCurrentTab('report')}
+                                className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-lg font-medium transition ${currentTab === 'report' ? 'bg-sky-600 text-white shadow' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'}`}
+                            >
+                                <i data-lucide="file-text" className="w-4 h-4"></i>
+                                <span>Report Generator</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Main Layout Container */}
+                    <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+                        {/* Sidebar Navigation */}
+                        <aside className="w-full lg:w-80 bg-white border-r border-slate-200 flex flex-col overflow-y-auto shrink-0 shadow-sm">
+                            <div className="p-4 border-b border-slate-100">
+                                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Methodology Pipeline</h2>
+                                <p className="text-sm font-bold text-slate-800 truncate">{activeInv.name}</p>
+                            </div>
+                            <nav className="p-3 space-y-1">
+                                <button
+                                    onClick={() => setCurrentTab('overview')}
+                                    className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium flex items-center justify-between transition ${currentTab === 'overview' ? 'bg-sky-50 text-sky-700 border-l-4 border-sky-600 shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                                >
+                                    <span className="flex items-center space-x-2.5">
+                                        <i data-lucide="layout-dashboard" className="w-4 h-4"></i>
+                                        <span>Engagement Overview</span>
+                                    </span>
+                                </button>
+
+                                <div className="pt-3 pb-1 px-3 text-[11px] font-bold uppercase text-slate-400 tracking-wider">Investigation Phases</div>
+
+                                {PHASES_CONFIG.map(phase => {
+                                    const phaseStatus = activeInv.phases[phase.id]?.status || 'not-started';
+                                    const isSelected = currentTab === `phase-${phase.id}`;
+                                    
+                                    let statusColor = 'bg-slate-100 text-slate-600 border-slate-200';
+                                    if (phaseStatus === 'complete') statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                    if (phaseStatus === 'in-progress') statusColor = 'bg-amber-50 text-amber-700 border-amber-200';
+
+                                    return (
+                                        <button
+                                            key={phase.id}
+                                            onClick={() => setCurrentTab(`phase-${phase.id}`)}
+                                            className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm flex items-center justify-between transition group ${isSelected ? 'bg-sky-50 text-sky-800 border-l-4 border-sky-600 font-semibold shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                                        >
+                                            <div className="flex items-center space-x-3 truncate">
+                                                <span className="text-xs text-slate-400 font-mono w-5 shrink-0">0{phase.id}</span>
+                                                <span className="truncate text-xs font-medium">{phase.name}</span>
+                                            </div>
+                                            <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${statusColor} shrink-0`}>
+                                                {phaseStatus === 'complete' ? 'Done' : phaseStatus === 'in-progress' ? 'Active' : 'Todo'}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </nav>
+                        </aside>
+
+                        {/* Main Content Area */}
+                        <main className="flex-1 overflow-y-auto p-6 lg:p-8">
+                            {currentTab === 'overview' && (
+                                <OverviewTab activeInv={activeInv} investigations={investigations} setCurrentTab={setCurrentTab} />
+                            )}
+
+                            {currentTab === 'report' && (
+                                <ReportTab activeInv={activeInv} copyToClipboard={copyToClipboard} handleGeneralFindingChange={handleGeneralFindingChange} />
+                            )}
+
+                            {currentTab.startsWith('phase-') && (() => {
+                                const phaseId = parseInt(currentTab.split('-')[1]);
+                                const phaseConfig = PHASES_CONFIG.find(p => p.id === phaseId);
+                                const phaseState = activeInv.phases[phaseId] || { status: 'not-started', data: {} };
+                                
+                                return (
+                                    <PhaseDetailView 
+                                        phaseConfig={phaseConfig}
+                                        phaseState={phaseState}
+                                        onDataChange={(field, val) => handlePhaseDataChange(phaseId, field, val)}
+                                        onStatusChange={(status) => handlePhaseStatusChange(phaseId, status)}
+                                        copyToClipboard={copyToClipboard}
+                                    />
+                                );
+                            })()}
+                        </main>
+                    </div>
+
+                    {/* New Target Modal */}
+                    {newTargetModalOpen && (
+                        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="bg-white border border-slate-200 rounded-xl max-w-md w-full p-6 shadow-2xl">
+                                <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                                    <h3 className="text-lg font-bold text-slate-800 flex items-center space-x-2">
+                                        <i data-lucide="target" className="w-5 h-5 text-sky-600"></i>
+                                        <span>New Investigation Target</span>
+                                    </h3>
+                                    <button onClick={() => setNewTargetModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                                        <i data-lucide="x" className="w-5 h-5"></i>
+                                    </button>
+                                </div>
+                                <form onSubmit={handleCreateTarget} className="space-y-4 text-sm">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Target Domain / Identifier *</label>
+                                        <input 
+                                            type="text" 
+                                            required
+                                            placeholder="e.g. target-domain.com"
+                                            value={newTargetName}
+                                            onChange={(e) => setNewTargetName(e.target.value)}
+                                            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Client / Engagement Name</label>
+                                        <input 
+                                            type="text" 
+                                            placeholder="e.g. Acme Corp Q3 Red Team"
+                                            value={newTargetClient}
+                                            onChange={(e) => setNewTargetClient(e.target.value)}
+                                            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500"
+                                        />
+                                    </div>
+                                    <div className="flex justify-end space-x-3 pt-3 border-t border-slate-100">
+                                        <button 
+                                            type="button" 
+                                            onClick={() => setNewTargetModalOpen(false)}
+                                            className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button 
+                                            type="submit" 
+                                            className="px-4 py-2 bg-sky-600 text-white font-bold rounded-lg hover:bg-sky-500 transition shadow-sm"
+                                        >
+                                            Initialize Target
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function OverviewTab({ activeInv, investigations, setCurrentTab }) {
+            const completedCount = Object.values(activeInv.phases).filter(p => p.status === 'complete').length;
+            const inProgressCount = Object.values(activeInv.phases).filter(p => p.status === 'in-progress').length;
+
+            return (
+                <div className="max-w-5xl mx-auto space-y-6">
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between pb-6 border-b border-slate-100 gap-4">
+                            <div>
+                                <span className="text-xs font-bold text-sky-600 uppercase tracking-wider">Active Engagement</span>
+                                <h1 className="text-2xl font-bold text-slate-900 mt-1">{activeInv.name}</h1>
+                                <p className="text-xs text-slate-500 mt-1">Client: {activeInv.client} | Created: {activeInv.dateCreated}</p>
+                            </div>
+                            <div className="flex items-center space-x-3">
+                                <button 
+                                    onClick={() => setCurrentTab('phase-1')}
+                                    className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition shadow-sm flex items-center space-x-2"
+                                >
+                                    <i data-lucide="play" className="w-4 h-4"></i>
+                                    <span>Start Investigation</span>
+                                </button>
+                                <button 
+                                    onClick={() => setCurrentTab('report')}
+                                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center space-x-2"
+                                >
+                                    <i data-lucide="file-text" className="w-4 h-4"></i>
+                                    <span>View Report</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-6">
+                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg">
+                                <div className="text-xs font-bold text-slate-400 uppercase">Completed Phases</div>
+                                <div className="text-2xl font-bold text-emerald-600 mt-1">{completedCount} / 9</div>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg">
+                                <div className="text-xs font-bold text-slate-400 uppercase">In Progress</div>
+                                <div className="text-2xl font-bold text-amber-600 mt-1">{inProgressCount} / 9</div>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg">
+                                <div className="text-xs font-bold text-slate-400 uppercase">Total Targets</div>
+                                <div className="text-2xl font-bold text-sky-600 mt-1">{investigations.length}</div>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg">
+                                <div className="text-xs font-bold text-slate-400 uppercase">Mode</div>
+                                <div className="text-xs font-bold text-slate-700 mt-2 bg-white px-2.5 py-1 rounded border border-slate-200 inline-block">Case Management</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Phase Execution Status</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {PHASES_CONFIG.map(phase => {
+                                const status = activeInv.phases[phase.id]?.status || 'not-started';
+                                let badgeClass = "bg-slate-100 text-slate-600 border-slate-200";
+                                if (status === 'complete') badgeClass = "bg-emerald-50 text-emerald-700 border-emerald-200";
+                                if (status === 'in-progress') badgeClass = "bg-amber-50 text-amber-700 border-amber-200";
+
+                                return (
+                                    <div 
+                                        key={phase.id} 
+                                        onClick={() => setCurrentTab(`phase-${phase.id}`)}
+                                        className="bg-slate-50 border border-slate-200 hover:border-sky-400 p-4 rounded-lg cursor-pointer transition flex flex-col justify-between space-y-3 shadow-xs"
+                                    >
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-bold text-sky-600">Phase 0{phase.id}</span>
+                                            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${badgeClass}`}>{status}</span>
+                                        </div>
+                                        <div className="text-sm font-bold text-slate-800">{phase.name}</div>
+                                        <div className="text-xs text-slate-500 line-clamp-2">{phase.finds}</div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function PhaseDetailView({ phaseConfig, phaseState, onDataChange, onStatusChange, copyToClipboard }) {
+            const data = phaseState.data || {};
+
+            return (
+                <div className="max-w-5xl mx-auto space-y-6">
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <div className="flex items-center space-x-2 text-sky-600 text-xs font-bold uppercase tracking-wider mb-1">
+                                <span>Phase 0{phaseConfig.id}</span>
+                                <span>/</span>
+                                <span>OSINT Methodology</span>
+                            </div>
+                            <h1 className="text-xl md:text-2xl font-bold text-slate-900">{phaseConfig.name}</h1>
+                        </div>
+                        <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
+                            {['not-started', 'in-progress', 'complete'].map(st => (
+                                <button
+                                    key={st}
+                                    onClick={() => onStatusChange(st)}
+                                    className={`px-3 py-1.5 text-xs font-bold rounded-md uppercase transition ${phaseState.status === st ? 'bg-white text-sky-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                                >
+                                    {st === 'not-started' ? 'Todo' : st === 'in-progress' ? 'Active' : 'Done'}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-1 space-y-6">
+                            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                                <h3 className="text-xs font-bold uppercase text-sky-600 tracking-wider mb-2 flex items-center space-x-2">
+                                    <i data-lucide="target" className="w-4 h-4"></i>
+                                    <span>Intelligence Goal</span>
+                                </h3>
+                                <p className="text-xs text-slate-600 leading-relaxed">{phaseConfig.finds}</p>
+                            </div>
+
+                            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                                <h3 className="text-xs font-bold uppercase text-sky-600 tracking-wider mb-3 flex items-center space-x-2">
+                                    <i data-lucide="terminal" className="w-4 h-4"></i>
+                                    <span>Reference Commands</span>
+                                </h3>
+                                <div className="space-y-2">
+                                    {phaseConfig.commands.map((cmd, idx) => (
+                                        <div key={idx} className="bg-slate-50 border border-slate-200 p-2.5 rounded-lg text-xs flex items-center justify-between group">
+                                            <span className="text-slate-700 truncate mr-2 font-mono font-medium">{cmd}</span>
+                                            <button 
+                                                onClick={() => copyToClipboard(cmd, 'Command')}
+                                                className="text-slate-400 hover:text-sky-600 p-1 rounded transition shrink-0"
+                                                title="Copy Command"
+                                            >
+                                                <i data-lucide="copy" className="w-3.5 h-3.5"></i>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+                            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+                                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center space-x-2">
+                                    <i data-lucide="edit-3" className="w-4 h-4 text-sky-600"></i>
+                                    <span>Recorded Findings</span>
+                                </h3>
+                                <span className="text-xs text-slate-400 font-medium">Paste results gathered from terminal</span>
+                            </div>
+
+                            <div className="space-y-4 text-sm">
+                                {phaseConfig.id === 1 && (
+                                    <>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Registrant Info</label>
+                                                <input type="text" value={data.registrant || ''} onChange={e => onDataChange('registrant', e.target.value)} placeholder="e.g. Acme Corp Admin" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Registrar</label>
+                                                <input type="text" value={data.registrar || ''} onChange={e => onDataChange('registrar', e.target.value)} placeholder="e.g. MarkMonitor Inc." className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Registration Date</label>
+                                                <input type="text" value={data.registrationDate || ''} onChange={e => onDataChange('registrationDate', e.target.value)} placeholder="e.g. 2010-04-12" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">A / AAAA Records</label>
+                                                <input type="text" value={data.aRecords || ''} onChange={e => onDataChange('aRecords', e.target.value)} placeholder="e.g. 192.0.2.50" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nameservers (NS)</label>
+                                            <textarea rows="2" value={data.nameservers || ''} onChange={e => onDataChange('nameservers', e.target.value)} placeholder="ns1.target.com&#10;ns2.target.com" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">MX Records (Mail)</label>
+                                                <textarea rows="2" value={data.mxRecords || ''} onChange={e => onDataChange('mxRecords', e.target.value)} placeholder="mail.target.com (Priority 10)" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">TXT / SPF / DKIM Records</label>
+                                                <textarea rows="2" value={data.txtRecords || ''} onChange={e => onDataChange('txtRecords', e.target.value)} placeholder="v=spf1 include:_spf.google.com ~all" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+
+                                {phaseConfig.id === 2 && (
+                                    <>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Primary IP Address</label>
+                                                <input type="text" value={data.primaryIp || ''} onChange={e => onDataChange('primaryIp', e.target.value)} placeholder="e.g. 192.0.2.50" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">GeoIP Location</label>
+                                                <input type="text" value={data.geoIp || ''} onChange={e => onDataChange('geoIp', e.target.value)} placeholder="e.g. Ashburn, VA, USA" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Hosting Provider / ASN</label>
+                                                <input type="text" value={data.hostingProvider || ''} onChange={e => onDataChange('hostingProvider', e.target.value)} placeholder="e.g. AWS EC2 (AS16509)" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Subnet Range</label>
+                                                <input type="text" value={data.subnet || ''} onChange={e => onDataChange('subnet', e.target.value)} placeholder="e.g. 192.0.2.0/24" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Co-Hosted Domains (Reverse DNS)</label>
+                                            <textarea rows="3" value={data.coHosted || ''} onChange={e => onDataChange('coHosted', e.target.value)} placeholder="staging.target.com&#10;internal-api.target.com" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                    </>
+                                )}
+
+                                {phaseConfig.id === 3 && (
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Discovered Subdomains (One per line)</label>
+                                        <textarea rows="6" value={data.subdomainsRaw || ''} onChange={e => onDataChange('subdomainsRaw', e.target.value)} placeholder="admin.target.com - 192.0.2.51&#10;vpn.target.com - 192.0.2.52" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none font-mono text-xs" />
+                                    </div>
+                                )}
+
+                                {phaseConfig.id === 4 && (
+                                    <>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Server Header</label>
+                                                <input type="text" value={data.server || ''} onChange={e => onDataChange('server', e.target.value)} placeholder="e.g. nginx/1.18.0" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">CMS / Framework</label>
+                                                <input type="text" value={data.cms || ''} onChange={e => onDataChange('cms', e.target.value)} placeholder="e.g. WordPress 6.2" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Analytics</label>
+                                                <input type="text" value={data.analytics || ''} onChange={e => onDataChange('analytics', e.target.value)} placeholder="e.g. Google Analytics" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">SSL/TLS Certificate Details</label>
+                                            <textarea rows="2" value={data.sslInfo || ''} onChange={e => onDataChange('sslInfo', e.target.value)} placeholder="Issued by Let's Encrypt, Valid until 2026-12-31" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Security Headers Check</label>
+                                            <textarea rows="2" value={data.securityHeaders || ''} onChange={e => onDataChange('securityHeaders', e.target.value)} placeholder="HSTS: Missing&#10;CSP: Present" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                    </>
+                                )}
+
+                                {phaseConfig.id === 5 && (
+                                    <>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Discovered Email Addresses</label>
+                                            <textarea rows="4" value={data.emailsRaw || ''} onChange={e => onDataChange('emailsRaw', e.target.value)} placeholder="john.doe@target.com&#10;admin@target.com" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none font-mono text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Breach & Credential Exposure Notes</label>
+                                            <textarea rows="3" value={data.breachData || ''} onChange={e => onDataChange('breachData', e.target.value)} placeholder="3 employee emails found in 2021 leak." className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                    </>
+                                )}
+
+                                {phaseConfig.id === 6 && (
+                                    <>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Personnel & Key Employee Profiles</label>
+                                            <textarea rows="4" value={data.personnel || ''} onChange={e => onDataChange('personnel', e.target.value)} placeholder="Jane Smith - CISO (LinkedIn)" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Social Presence & Leak Notes</label>
+                                            <textarea rows="3" value={data.socialPresence || ''} onChange={e => onDataChange('socialPresence', e.target.value)} placeholder="Public GitHub repo contains hardcoded internal URL." className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                    </>
+                                )}
+
+                                {phaseConfig.id === 7 && (
+                                    <>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Historical Endpoints / Forgotten Admin Panels</label>
+                                            <textarea rows="4" value={data.endpoints || ''} onChange={e => onDataChange('endpoints', e.target.value)} placeholder="https://target.com/old-admin/login.php" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none font-mono text-xs" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Outdated Tech / Past Directory Structures</label>
+                                            <textarea rows="3" value={data.oldTech || ''} onChange={e => onDataChange('oldTech', e.target.value)} placeholder="Site migrated from Drupal in 2023." className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none" />
+                                        </div>
+                                    </>
+                                )}
+
+                                {phaseConfig.id === 8 && (
+                                    <>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Dork Results & Exposed Files</label>
+                                            <textarea rows="5" value={data.dorksFound || ''} onChange={e => onDataChange('dorksFound', e.target.value)} placeholder="site:target.com filetype:pdf" className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none font-mono text-xs" />
+                                        </div>
+                                    </>
+                                )}
+
+                                {phaseConfig.id === 9 && (
+                                    <>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Passive Recon Automation Notes</label>
+                                            <textarea rows="5" value={data.notes || ''} onChange={e => onDataChange('notes', e.target.value)} placeholder="Imported workspace data from recon-ng." className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:border-sky-500 focus:outline-none font-mono text-xs" />
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ReportTab({ activeInv, copyToClipboard, handleGeneralFindingChange }) {
+            const p1 = activeInv.phases[1]?.data || {};
+            const p2 = activeInv.phases[2]?.data || {};
+            const p3 = activeInv.phases[3]?.data || {};
+            const p4 = activeInv.phases[4]?.data || {};
+            const p5 = activeInv.phases[5]?.data || {};
+            const p6 = activeInv.phases[6]?.data || {};
+            const p7 = activeInv.phases[7]?.data || {};
+            const p8 = activeInv.phases[8]?.data || {};
+            const p9 = activeInv.phases[9]?.data || {};
+            const findings = activeInv.findings || {};
+
+            const markdownReport = `════════════════════════════════════════════════════════════════════
+OSINT INVESTIGATION REPORT: ${activeInv.name.toUpperCase()}
+Client: ${activeInv.client} | Date: ${activeInv.dateCreated}
+════════════════════════════════════════════════════════════════════
+
+1. DOMAIN INFORMATION
+--------------------------------------------------------------------
+- Registrant: ${p1.registrant || 'N/A'}
+- Registrar: ${p1.registrar || 'N/A'}
+- Registration Date: ${p1.registrationDate || 'N/A'}
+- Nameservers:\n${p1.nameservers ? p1.nameservers.split('\n').map(l => `  • ${l}`).join('\n') : '  • N/A'}
+- DNS Records (A/MX/TXT):
+  • A/AAAA: ${p1.aRecords || 'N/A'}
+  • MX: ${p1.mxRecords || 'N/A'}
+  • TXT/SPF: ${p1.txtRecords || 'N/A'}
+
+2. IP ADDRESSES & INFRASTRUCTURE
+--------------------------------------------------------------------
+- Primary IP Address: ${p2.primaryIp || 'N/A'}
+- Geolocation: ${p2.geoIp || 'N/A'}
+- Hosting Provider / ASN: ${p2.hostingProvider || 'N/A'}
+- Subnet Range: ${p2.subnet || 'N/A'}
+- Co-Hosted Domains (Reverse DNS):\n${p2.coHosted ? p2.coHosted.split('\n').map(l => `  • ${l}`).join('\n') : '  • N/A'}
+
+3. SUBDOMAINS
+--------------------------------------------------------------------
+${p3.subdomainsRaw ? p3.subdomainsRaw.split('\n').map(l => `• ${l}`).join('\n') : '• No subdomains recorded.'}
+
+4. WEB TECHNOLOGIES
+--------------------------------------------------------------------
+- Server Header: ${p4.server || 'N/A'}
+- CMS / Framework: ${p4.cms || 'N/A'}
+- Analytics / Trackers: ${p4.analytics || 'N/A'}
+- SSL/TLS Details: ${p4.sslInfo || 'N/A'}
+- Security Headers: ${p4.securityHeaders || 'N/A'}
+
+5. PERSONNEL & SOCIAL PRESENCE
+--------------------------------------------------------------------
+- Identified Employees & Roles:
+${p6.personnel ? p6.personnel.split('\n').map(l => `  • ${l}`).join('\n') : '  • None recorded'}
+- Discovered Email Addresses:
+${p5.emailsRaw ? p5.emailsRaw.split('\n').map(l => `  • ${l}`).join('\n') : '  • None recorded'}
+- Breach & Credential Exposure: ${p5.breachData || 'N/A'}
+- Social & Public Repository Notes: ${p6.socialPresence || 'N/A'}
+
+6. INTERESTING FINDINGS
+--------------------------------------------------------------------
+${p7.endpoints ? `Wayback / Historical Endpoints:\n${p7.endpoints}\n\n` : ''}${p8.dorksFound ? `Google Dorks & Exposed Files:\n${p8.dorksFound}\n\n` : ''}${p9.notes ? `Passive Automation Notes:\n${p9.notes}\n\n` : ''}${findings.interesting || 'No additional interesting findings recorded.'}
+
+7. RECOMMENDATIONS
+--------------------------------------------------------------------
+${findings.recommendations || 'No specific recommendations recorded.'}
+
+════════════════════════════════════════════════════════════════════
+[END OF REPORT]
+`;
+
+            return (
+                <div className="max-w-4xl mx-auto space-y-6">
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex items-center justify-between">
+                        <div>
+                            <h1 className="text-xl font-bold text-slate-900 flex items-center space-x-2">
+                                <i data-lucide="file-text" className="w-5 h-5 text-sky-600"></i>
+                                <span>Live Report Generator</span>
+                            </h1>
+                            <p className="text-xs text-slate-500 mt-1">Assembles all recorded findings into the 7-section report format.</p>
+                        </div>
+                        <button 
+                            onClick={() => copyToClipboard(markdownReport, 'Full Report')}
+                            className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition shadow-sm flex items-center space-x-2"
+                        >
+                            <i data-lucide="copy" className="w-4 h-4"></i>
+                            <span>Copy Report Markdown</span>
+                        </button>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
+                        <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Final Report Curation & Recommendations</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Additional Interesting Findings (Section 6)</label>
+                                <textarea 
+                                    rows="4"
+                                    value={findings.interesting || ''}
+                                    onChange={(e) => handleGeneralFindingChange('interesting', e.target.value)}
+                                    placeholder="Summarize critical discoveries..."
+                                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 text-xs focus:border-sky-500 focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Security Recommendations (Section 7)</label>
+                                <textarea 
+                                    rows="4"
+                                    value={findings.recommendations || ''}
+                                    onChange={(e) => handleGeneralFindingChange('recommendations', e.target.value)}
+                                    placeholder="List actionable hardening steps..."
+                                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 text-xs focus:border-sky-500 focus:outline-none"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+                        <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+                            <span className="text-xs font-bold uppercase text-slate-500 tracking-wider">Report Output Preview</span>
+                            <span className="text-xs text-slate-400 font-mono">Plaintext / Markdown Format</span>
+                        </div>
+                        <pre className="bg-slate-50 border border-slate-200 p-4 rounded-lg text-xs text-slate-700 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed select-all">
+                            {markdownReport}
+                        </pre>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
